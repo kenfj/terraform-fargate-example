@@ -72,8 +72,8 @@ resource "aws_route_table_association" "private" {
 
 # ALB Security group
 # This is the group you need to edit if you want to restrict access to your application
-resource "aws_security_group" "lb" {
-  name        = "${var.app_name}-lb"
+resource "aws_security_group" "alb" {
+  name        = "${var.app_name}-alb"
   description = "controls access to the ALB"
   vpc_id      = "${aws_vpc.main.id}"
 
@@ -108,7 +108,7 @@ resource "aws_security_group" "ecs_tasks" {
     protocol        = "tcp"
     from_port       = "${var.app_port}"
     to_port         = "${var.app_port}"
-    security_groups = ["${aws_security_group.lb.id}"]
+    security_groups = ["${aws_security_group.alb.id}"]
   }
 
   egress {
@@ -124,7 +124,7 @@ resource "aws_security_group" "ecs_tasks" {
 resource "aws_alb" "main" {
   name            = "${var.app_name}"
   subnets         = ["${aws_subnet.public.*.id}"]
-  security_groups = ["${aws_security_group.lb.id}"]
+  security_groups = ["${aws_security_group.alb.id}"]
 }
 
 resource "aws_alb_target_group" "app" {

@@ -8,6 +8,11 @@ variable "az_count" {
   default     = "2"
 }
 
+variable "app_name" {
+  description = "app name used for Name tag"
+  default     = "tf-example-app"
+}
+
 variable "app_image" {
   description = "Docker image to run in the ECS cluster"
   default     = "nginx:latest"

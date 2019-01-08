@@ -73,7 +73,7 @@ resource "aws_route_table_association" "private" {
 # ALB Security group
 # This is the group you need to edit if you want to restrict access to your application
 resource "aws_security_group" "lb" {
-  name        = "tf-ecs-alb"
+  name        = "${var.app_name}-lb"
   description = "controls access to the ALB"
   vpc_id      = "${aws_vpc.main.id}"
 
@@ -90,11 +90,17 @@ resource "aws_security_group" "lb" {
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
+
+  # need this to avoid DependencyViolation
+  # https://www.bountysource.com/issues/49355274-aws_security_group-dependencyviolation-resource-sg-xxx-has-a-dependent-object
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 # Traffic to the ECS Cluster should only come from the ALB
 resource "aws_security_group" "ecs_tasks" {
-  name        = "tf-ecs-tasks"
+  name        = "${var.app_name}-ecs-tasks"
   description = "allow inbound access from the ALB only"
   vpc_id      = "${aws_vpc.main.id}"
 
@@ -116,13 +122,13 @@ resource "aws_security_group" "ecs_tasks" {
 ### ALB
 
 resource "aws_alb" "main" {
-  name            = "tf-ecs-chat"
+  name            = "${var.app_name}"
   subnets         = ["${aws_subnet.public.*.id}"]
   security_groups = ["${aws_security_group.lb.id}"]
 }
 
 resource "aws_alb_target_group" "app" {
-  name        = "tf-ecs-chat"
+  name        = "${var.app_name}"
   port        = 80
   protocol    = "HTTP"
   vpc_id      = "${aws_vpc.main.id}"
@@ -144,7 +150,7 @@ resource "aws_alb_listener" "front_end" {
 ### ECS
 
 resource "aws_ecs_cluster" "main" {
-  name = "tf-ecs-cluster"
+  name = "${var.app_name}"
 }
 
 resource "aws_ecs_task_definition" "app" {
@@ -160,7 +166,7 @@ resource "aws_ecs_task_definition" "app" {
     "cpu": ${var.fargate_cpu},
     "image": "${var.app_image}",
     "memory": ${var.fargate_memory},
-    "name": "app",
+    "name": "${var.app_name}",
     "networkMode": "awsvpc",
     "portMappings": [
       {
@@ -174,7 +180,7 @@ DEFINITION
 }
 
 resource "aws_ecs_service" "main" {
-  name            = "tf-ecs-service"
+  name            = "${var.app_name}"
   cluster         = "${aws_ecs_cluster.main.id}"
   task_definition = "${aws_ecs_task_definition.app.arn}"
   desired_count   = "${var.app_count}"
@@ -187,7 +193,7 @@ resource "aws_ecs_service" "main" {
 
   load_balancer {
     target_group_arn = "${aws_alb_target_group.app.id}"
-    container_name   = "app"
+    container_name   = "${var.app_name}"
     container_port   = "${var.app_port}"
   }
 

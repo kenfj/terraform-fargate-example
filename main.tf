@@ -79,8 +79,8 @@ resource "aws_security_group" "alb" {
 
   ingress {
     protocol    = "tcp"
-    from_port   = 80
-    to_port     = 80
+    from_port   = "${var.app_port}"
+    to_port     = "${var.app_port}"
     cidr_blocks = ["0.0.0.0/0"]
   }
 
@@ -106,8 +106,8 @@ resource "aws_security_group" "ecs_tasks" {
 
   ingress {
     protocol        = "tcp"
-    from_port       = "${var.app_port}"
-    to_port         = "${var.app_port}"
+    from_port       = "${var.container_port}"
+    to_port         = "${var.container_port}"
     security_groups = ["${aws_security_group.alb.id}"]
   }
 
@@ -128,17 +128,27 @@ resource "aws_alb" "main" {
 }
 
 resource "aws_alb_target_group" "app" {
-  name        = "${var.app_name}"
-  port        = 80
+  port        = "${var.container_port}"
   protocol    = "HTTP"
   vpc_id      = "${aws_vpc.main.id}"
   target_type = "ip"
+
+  # need these to update ALB Target Group
+  # https://github.com/terraform-providers/terraform-provider-aws/issues/636
+  tags {
+    Name = "${var.app_name}"
+  }
+
+  # https://github.com/terraform-providers/terraform-provider-aws/issues/1315
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 # Redirect all traffic from the ALB to the target group
 resource "aws_alb_listener" "front_end" {
   load_balancer_arn = "${aws_alb.main.id}"
-  port              = "80"
+  port              = "${var.app_port}"
   protocol          = "HTTP"
 
   default_action {
@@ -154,7 +164,7 @@ resource "aws_ecs_cluster" "main" {
 }
 
 resource "aws_ecs_task_definition" "app" {
-  family                   = "app"
+  family                   = "${var.app_name}"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
   cpu                      = "${var.fargate_cpu}"
@@ -163,20 +173,56 @@ resource "aws_ecs_task_definition" "app" {
   container_definitions = <<DEFINITION
 [
   {
-    "cpu": ${var.fargate_cpu},
-    "image": "${var.app_image}",
-    "memory": ${var.fargate_memory},
     "name": "${var.app_name}",
+    "image": "${aws_ecr_repository.main.repository_url}:latest",
     "networkMode": "awsvpc",
     "portMappings": [
       {
-        "containerPort": ${var.app_port},
-        "hostPort": ${var.app_port}
+        "containerPort": ${var.container_port},
+        "hostPort": ${var.container_port}
       }
-    ]
+    ],
+    "logConfiguration": {
+      "logDriver": "awslogs",
+      "options": {
+        "awslogs-group": "${aws_cloudwatch_log_group.main.name}",
+        "awslogs-region": "${var.aws_region}",
+        "awslogs-stream-prefix": "ecs"
+      }
+    }
   }
 ]
 DEFINITION
+
+  # ecsTaskExecutionRole required to pull image from ECR or log Cloudwatch
+  # create new role since default ecsTaskExecutionRole sometime does not exist
+  execution_role_arn = "${aws_iam_role.ecs_task_execution_role.arn}"
+}
+
+resource "aws_iam_role" "ecs_task_execution_role" {
+  name               = "ecs-task-execution-role"
+  assume_role_policy = "${data.aws_iam_policy_document.ecs_task_execution_role.json}"
+}
+
+resource "aws_iam_role_policy_attachment" "ecs_task_execution_role" {
+  role       = "${aws_iam_role.ecs_task_execution_role.name}"
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+}
+
+data "aws_iam_policy_document" "ecs_task_execution_role" {
+  statement {
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["ecs-tasks.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_cloudwatch_log_group" "main" {
+  name              = "/ecs/${var.app_name}"
+  retention_in_days = 30
 }
 
 resource "aws_ecs_service" "main" {
@@ -194,10 +240,20 @@ resource "aws_ecs_service" "main" {
   load_balancer {
     target_group_arn = "${aws_alb_target_group.app.id}"
     container_name   = "${var.app_name}"
-    container_port   = "${var.app_port}"
+    container_port   = "${var.container_port}"
   }
 
   depends_on = [
     "aws_alb_listener.front_end",
   ]
+}
+
+# ECR
+
+resource "aws_ecr_repository" "main" {
+  name = "${var.app_name}"
+}
+
+output "repository_url" {
+  value = "${aws_ecr_repository.main.repository_url}"
 }
